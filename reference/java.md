@@ -2,7 +2,7 @@
 
 Java 审查重点：Java 17/21 新特性、Spring Boot 3 最佳实践、并发编程（虚拟线程）、JPA 性能优化以及代码可维护性。
 
-> Java 8 / Spring Boot 2 / `javax.*` 遗留栈请用 [Java 8 Guide](java8.md)。
+> For Java 8 / Spring Boot 2 / `javax.*` legacy stacks, use the [Java 8 Guide](java8.md).
 
 ## 目录
 

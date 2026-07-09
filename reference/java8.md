@@ -1,73 +1,73 @@
 # Java 8 / Legacy Stack Code Review Guide
 
-面向仍运行在 **Java 8**（及相近遗留栈：Spring Boot 2.x、`javax.*`、Hibernate 5）上的代码审查。不要用 Java 17/21 特性（Records、文本块、虚拟线程、`ProblemDetail` 等）去要求这类 PR。
+Review guidance for codebases still on **Java 8** (and nearby legacy stacks: Spring Boot 2.x, `javax.*`, Hibernate 5). Do **not** require Java 17/21 features (records, text blocks, virtual threads, `ProblemDetail`, etc.) on these PRs.
 
-> 现代栈（Java 17/21 + Spring Boot 3）请用 [Java Guide](java.md)。
+> For modern stacks (Java 17/21 + Spring Boot 3), use the [Java Guide](java.md).
 
-## 目录
+## Table of Contents
 
-- [适用范围](#适用范围)
-- [Lambda 与函数式接口](#lambda-与函数式接口)
+- [When to Use This Guide](#when-to-use-this-guide)
+- [Lambdas & Functional Interfaces](#lambdas--functional-interfaces)
 - [Stream API](#stream-api)
 - [Optional](#optional)
 - [Date/Time API (`java.time`)](#datetime-api-javatime)
-- [并发：线程池与 CompletableFuture](#并发线程池与-completablefuture)
+- [Concurrency: Thread Pools & CompletableFuture](#concurrency-thread-pools--completablefuture)
 - [Spring Boot 2](#spring-boot-2)
 - [JPA / Hibernate 5](#jpa--hibernate-5)
-- [异常处理](#异常处理)
-- [测试](#测试)
+- [Exception Handling](#exception-handling)
+- [Testing](#testing)
 - [Review Checklist](#review-checklist)
 - [References](#references)
 
 ---
 
-## 适用范围
+## When to Use This Guide
 
-| 场景 | 加载指南 |
-|------|----------|
-| Java 8 / 11（未用现代语法）、Spring Boot 2.x、`javax.persistence` | **本文件** |
-| Java 17/21、Spring Boot 3、`jakarta.*`、虚拟线程 | [java.md](java.md) |
-| 正在从 Boot 2 → Boot 3 迁移 | 两边对照：本文件看遗留坑，`java.md` 看目标态 |
+| Scenario | Load |
+|----------|------|
+| Java 8 / 11 (no modern syntax), Spring Boot 2.x, `javax.persistence` | **This file** |
+| Java 17/21, Spring Boot 3, `jakarta.*`, virtual threads | [java.md](java.md) |
+| Migrating Boot 2 → Boot 3 | Use both: this guide for legacy pitfalls, `java.md` for the target |
 
-审查时先确认 `pom.xml` / `build.gradle` 的 `java.version`、Spring Boot 版本和 `javax` vs `jakarta` 包名，再选指南。
+Confirm `java.version`, Spring Boot version, and `javax` vs `jakarta` package names in `pom.xml` / `build.gradle` before choosing a guide.
 
 ---
 
-## Lambda 与函数式接口
+## Lambdas & Functional Interfaces
 
-### 保持短小，优先方法引用
+### Keep them short; prefer method references
 
 ```java
-// ❌ Lambda 过长，难读、难测、难调试
+// ❌ Long lambdas are hard to read, test, and debug
 users.stream().forEach(u -> {
-    // 十几行业务逻辑...
+    // dozens of lines of business logic...
 });
 
-// ✅ 抽成方法，或使用方法引用
+// ✅ Extract a method, or use a method reference
 users.forEach(this::processUser);
 ```
 
-### 优先使用 JDK 已有函数式接口
+### Prefer JDK functional interfaces
 
 ```java
-// ❌ 无必要的自定义函数式接口
+// ❌ Unnecessary custom functional interface
 @FunctionalInterface
 interface UserCallback {
     void accept(User u);
 }
 
-// ✅ 用 Consumer / Function / Predicate / Supplier / BiFunction 等
+// ✅ Use Consumer / Function / Predicate / Supplier / BiFunction, etc.
 void process(Consumer<User> callback) { ... }
 ```
 
-### 捕获变量必须 effectively final
+### Captured variables must be effectively final
 
 ```java
-// ❌ 修改被捕获变量 → 编译失败或被迫用数组/Atomic 糊弄
+// ❌ Mutating a captured variable → compile error (or Atomic/array hacks)
 int sum = 0;
-list.forEach(n -> sum += n); // 编译错误
+list.forEach(n -> sum += n); // does not compile
 
-// ✅ 用 Stream 归约，或显式可变累加器类型
+// ✅ Reduce with a stream, or use an explicit mutable accumulator type
 int sum = list.stream().mapToInt(Integer::intValue).sum();
 ```
 
@@ -75,22 +75,22 @@ int sum = list.stream().mapToInt(Integer::intValue).sum();
 
 ## Stream API
 
-### 简单循环不要硬上 Stream
+### Do not force Streams for simple loops
 
 ```java
-// ❌ 副作用 + 无转换，Stream 无收益
+// ❌ Side effects only — Stream adds no value
 items.stream().forEach(item -> process(item));
 
-// ✅ for-each 更清晰
+// ✅ Plain for-each is clearer
 for (Item item : items) {
     process(item);
 }
 ```
 
-### 收集结果：Java 8 用 `Collectors`
+### Collect with `Collectors` on Java 8
 
 ```java
-// ❌ Java 16+ 的 Stream.toList() —— Java 8 没有
+// ❌ Stream.toList() is Java 16+ — not available on Java 8
 list.stream().map(...).toList();
 
 // ✅ Java 8
@@ -99,60 +99,60 @@ List<Dto> result = list.stream()
     .collect(Collectors.toList());
 ```
 
-注意：`Collectors.toList()` 不保证不可变；若需要不可变，用 `Collections.unmodifiableList(...)` 或 Guava/`List.copyOf`（后者需更高版本 JDK）。
+Note: `Collectors.toList()` is not guaranteed immutable. For an unmodifiable list, wrap with `Collections.unmodifiableList(...)` or use Guava / `List.copyOf` (the latter needs a newer JDK).
 
-### `Collectors.toMap` 的两个经典坑
+### Two classic `Collectors.toMap` pitfalls
 
 ```java
-// ❌ value 为 null → NPE（内部走 Map.merge，禁止 null value）
+// ❌ Null values → NPE (internally uses Map.merge, which forbids null values)
 Map<Long, String> map = users.stream()
-    .collect(Collectors.toMap(User::getId, User::getNickname)); // nickname 可能 null
+    .collect(Collectors.toMap(User::getId, User::getNickname)); // nickname may be null
 
-// ✅ 先过滤，或显式处理 null
+// ✅ Filter first, or handle nulls explicitly
 Map<Long, String> map = users.stream()
     .filter(u -> u.getNickname() != null)
     .collect(Collectors.toMap(User::getId, User::getNickname));
 
-// ❌ 重复 key → IllegalStateException
+// ❌ Duplicate keys → IllegalStateException
 .collect(Collectors.toMap(User::getName, Function.identity()));
 
-// ✅ 提供 merge function
+// ✅ Provide a merge function
 .collect(Collectors.toMap(User::getName, Function.identity(), (a, b) -> a));
 ```
 
-### 慎用 `parallelStream()`
+### Be careful with `parallelStream()`
 
 ```java
-// ❌ 小集合 / I/O / 有共享可变状态 —— parallel 往往更慢或更危险
-list.parallelStream().forEach(sharedList::add); // 竞态
+// ❌ Small collections / I/O / shared mutable state — often slower or unsafe
+list.parallelStream().forEach(sharedList::add); // race
 
-// ❌ 在 parallel 里用有副作用的 forEach 写非并发集合
+// ❌ Side-effecting forEach into a non-concurrent collection
 map.entrySet().parallelStream().forEach(e -> result.put(e.getKey(), e.getValue()));
 
-// ✅ CPU 密集 + 无共享可变状态 + 数据量足够大时才考虑
-// ✅ 收集用 collect(toMap/toConcurrentMap)，不要用 forEach 往外部 Map 塞
+// ✅ Consider only for CPU-bound work, no shared mutable state, and large enough data
+// ✅ Collect with toMap / toConcurrentMap — do not forEach into an external Map
 Map<K, V> result = list.parallelStream()
     .collect(Collectors.toConcurrentMap(Item::getKey, Item::getValue, (a, b) -> a));
 ```
 
-并行流默认用 `ForkJoinPool.commonPool()`，会与同进程其他 parallel/CF 任务抢线程。
+Parallel streams use `ForkJoinPool.commonPool()` by default and compete with other parallel / CompletableFuture work in the same process.
 
-### 不要修改 Stream 源；避免嵌套 `forEach`
+### Do not mutate the stream source; avoid nested `forEach`
 
 ```java
-// ❌ 管道执行中修改源 → ConcurrentModificationException
+// ❌ Mutating the source during the pipeline → ConcurrentModificationException
 list.stream().peek(list::add).count();
 
-// ❌ 嵌套 forEach 可读性差，且难做短路
+// ❌ Nested forEach is hard to read and hard to short-circuit
 a.forEach(x -> b.forEach(y -> ...));
 
-// ✅ 用 flatMap / 常规循环表达笛卡尔或关联逻辑
+// ✅ Prefer flatMap or ordinary loops for cartesian / join-style logic
 ```
 
-### 原始流避免装箱
+### Prefer primitive streams to avoid boxing
 
 ```java
-// ❌ Stream<Integer> 装箱开销
+// ❌ Stream<Integer> boxing overhead
 int sum = list.stream().map(Order::getAmount).reduce(0, Integer::sum);
 
 // ✅ IntStream / LongStream / DoubleStream
@@ -163,71 +163,71 @@ int sum = list.stream().mapToInt(Order::getAmount).sum();
 
 ## Optional
 
-**设计意图**：作为**返回值**表达「可能没有」，不是通用 null 替代品。
+**Intent:** express possible absence as a **return type**, not as a general null replacement.
 
 ```java
-// ❌ 字段 / 参数 / 集合元素用 Optional（序列化、反射、API 噪音）
+// ❌ Optional as field / parameter / collection element (serialization, reflection, API noise)
 class User {
     private Optional<String> email;
 }
 void send(Optional<String> email) { ... }
-Optional<List<Order>> findOrders(); // 空列表已能表达「没有」
+Optional<List<Order>> findOrders(); // empty list already means "none"
 
-// ✅ 仅作返回值；集合返回空集合
+// ✅ Return type only; return empty collections for "none"
 public Optional<User> findById(Long id) { ... }
-public List<Order> findOrders(Long userId) { ... } // 没有则 emptyList
+public List<Order> findOrders(Long userId) { ... } // emptyList when none
 ```
 
-### 禁止 `isPresent()` + `get()` 当 null 检查用
+### Do not use `isPresent()` + `get()` as a null check
 
 ```java
-// ❌ 比 null 检查更啰嗦，且 get() 仍可能炸
+// ❌ More verbose than a null check, and get() can still blow up
 if (userOpt.isPresent()) {
     return userOpt.get().getName();
 }
 return "Unknown";
 
-// ✅ 函数式链式（Java 8 可用）
+// ✅ Functional chain (available on Java 8)
 return userOpt.map(User::getName).orElse("Unknown");
 ```
 
 ### `orElse` vs `orElseGet`
 
 ```java
-// ❌ orElse 参数会立刻求值（即使 Optional 有值）
-return findUser(id).orElse(loadDefaultFromDb()); // 总是打 DB
+// ❌ orElse argument is always evaluated (even when the Optional is present)
+return findUser(id).orElse(loadDefaultFromDb()); // always hits DB
 
-// ✅ 昂贵默认值用 orElseGet
+// ✅ Expensive defaults → orElseGet
 return findUser(id).orElseGet(this::loadDefaultFromDb);
 
-// ✅ 必须有值时（Java 8）
+// ✅ Required value (Java 8)
 return findUser(id).orElseThrow(() -> new UserNotFoundException(id));
-// 注意：无参 orElseThrow() 是 Java 10+，Java 8 必须传 Supplier
+// Note: no-arg orElseThrow() is Java 10+; Java 8 requires a Supplier
 ```
 
-### `of` vs `ofNullable`；嵌套用 `flatMap`
+### `of` vs `ofNullable`; nest with `flatMap`
 
 ```java
-// ❌ of(null) → 立刻 NPE
+// ❌ of(null) → immediate NPE
 Optional.of(possiblyNull);
 
 // ✅
 Optional.ofNullable(possiblyNull);
 
-// ❌ map 返回 Optional 造成 Optional<Optional<T>>
-optional.map(this::findOther); // findOther 返回 Optional
+// ❌ map returning Optional → Optional<Optional<T>>
+optional.map(this::findOther); // findOther returns Optional
 
 // ✅
 optional.flatMap(this::findOther);
 ```
 
-Java 8 **没有** `Optional.stream()` / `ifPresentOrElse` / `or`（这些是 Java 9+）。过滤 Optional 集合时用：
+Java 8 has **no** `Optional.stream()` / `ifPresentOrElse` / `or` (those are Java 9+). Filtering a collection of Optionals:
 
 ```java
 list.stream()
     .map(this::findUser)
     .filter(Optional::isPresent)
-    .map(Optional::get) // 此处已 filter，可接受；或抽 helper
+    .map(Optional::get) // OK after filter; or extract a helper
     .collect(Collectors.toList());
 ```
 
@@ -235,104 +235,104 @@ list.stream()
 
 ## Date/Time API (`java.time`)
 
-遗留系统最常见的生产事故来源之一：继续用 `Date` / `Calendar` / `SimpleDateFormat`。
+One of the most common production footguns in legacy systems: keeping `Date` / `Calendar` / `SimpleDateFormat`.
 
 ```java
-// ❌ SimpleDateFormat 线程不安全，静态共享会错乱
+// ❌ SimpleDateFormat is not thread-safe; a shared static instance corrupts state
 private static final SimpleDateFormat SDF = new SimpleDateFormat("yyyy-MM-dd");
 
-// ✅ DateTimeFormatter 不可变、线程安全
+// ✅ DateTimeFormatter is immutable and thread-safe
 private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 ```
 
-### 选对类型
+### Pick the right type
 
-| 类型 | 用途 |
-|------|------|
-| `Instant` | 机器时间戳、审计、跨服务事件（UTC 时间线） |
-| `LocalDate` | 只有日期（生日、营业日） |
-| `LocalDateTime` | **无时区**的日期时间；不要用来表示「某事件发生时刻」 |
-| `ZonedDateTime` / `OffsetDateTime` | 需要时区或 offset 的人类时间 |
+| Type | Use for |
+|------|---------|
+| `Instant` | Machine timestamps, audit, cross-service events (UTC timeline) |
+| `LocalDate` | Date only (birthday, business day) |
+| `LocalDateTime` | Date-time **without** zone; do not use for "when an event happened" |
+| `ZonedDateTime` / `OffsetDateTime` | Human time that needs a zone or offset |
 
 ```java
-// ❌ 用 LocalDateTime 存「下单时间」——跨时区/DST 会歧义
+// ❌ LocalDateTime for "order placed at" — ambiguous across zones / DST
 private LocalDateTime createdAt = LocalDateTime.now();
 
-// ✅ 事件时刻用 Instant；需要展示再转时区
+// ✅ Instant for event time; convert to a zone only for display
 private Instant createdAt = Instant.now();
 
-// ❌ now() 依赖 JVM 默认时区，CI / 生产 / 开发机不一致
+// ❌ now() depends on the JVM default zone — CI / prod / laptop disagree
 LocalDate.now();
 
-// ✅ 显式 ZoneId，或注入 Clock 便于测试
+// ✅ Explicit ZoneId, or inject Clock for tests
 LocalDate.now(ZoneOffset.UTC);
 LocalDate.now(clock);
 ```
 
-### 格式化陷阱
+### Formatting traps
 
 ```java
-// ❌ YYYY 是 week-based year，跨年周会错年
+// ❌ YYYY is week-based year — wrong year near year boundaries
 DateTimeFormatter.ofPattern("YYYY-MM-dd");
 
-// ✅ 日历年用 yyyy
+// ✅ Calendar year uses yyyy
 DateTimeFormatter.ofPattern("yyyy-MM-dd");
 ```
 
-与旧 API 互转：`date.toInstant()`、`Date.from(instant)`、`LocalDateTime.ofInstant(instant, zone)`。
+Interop with legacy APIs: `date.toInstant()`, `Date.from(instant)`, `LocalDateTime.ofInstant(instant, zone)`.
 
 ---
 
-## 并发：线程池与 CompletableFuture
+## Concurrency: Thread Pools & CompletableFuture
 
-Java 8 **没有虚拟线程**。I/O 密集靠合理的线程池，而不是 `newCachedThreadPool` 或无界队列硬扛。
+Java 8 has **no virtual threads**. I/O-heavy work needs a well-sized pool — not `newCachedThreadPool` or an unbounded queue.
 
 ```java
-// ❌ 无界队列 + 默认拒绝策略，过载时延迟爆炸或 OOM
-ExecutorService exec = Executors.newFixedThreadPool(8); // 队列无界
+// ❌ Unbounded queue + default rejection — latency explodes or OOM under load
+ExecutorService exec = Executors.newFixedThreadPool(8); // unbounded queue
 
-// ❌ 不 shutdown，线程泄漏
+// ❌ Never shut down → thread leak
 Executors.newFixedThreadPool(8).submit(task);
 
-// ✅ 有界队列 + 明确拒绝策略 + 生命周期管理
+// ✅ Bounded queue + explicit rejection policy + lifecycle management
 ThreadPoolExecutor exec = new ThreadPoolExecutor(
     8, 16, 60L, TimeUnit.SECONDS,
     new ArrayBlockingQueue<>(500),
     new ThreadPoolExecutor.CallerRunsPolicy());
-// 应用关闭时：shutdown → awaitTermination → shutdownNow
+// On shutdown: shutdown → awaitTermination → shutdownNow
 ```
 
 ### CompletableFuture
 
 ```java
-// ❌ I/O 任务丢进 commonPool（supplyAsync 无 Executor）
+// ❌ I/O on the common pool (supplyAsync with no Executor)
 CompletableFuture.supplyAsync(() -> restTemplate.getForObject(url, Dto.class));
 
-// ✅ 显式 I/O 线程池
+// ✅ Explicit I/O executor
 CompletableFuture.supplyAsync(() -> callRemote(), ioExecutor);
 
-// ❌ thenApply 里再返回 CF → 嵌套 CompletableFuture<CompletableFuture<T>>
+// ❌ thenApply returning a CF → nested CompletableFuture<CompletableFuture<T>>
 .thenApply(id -> findAsync(id));
 
-// ✅ 依赖异步用 thenCompose
+// ✅ Dependent async work → thenCompose
 .thenCompose(id -> findAsync(id));
 
-// ❌ 在异步回调里 get()/join()，易饿死线程池甚至死锁
+// ❌ get()/join() inside async callbacks — starves the pool or deadlocks
 .thenApply(x -> other.join());
 
-// ✅ 组合用 allOf / thenCombine；只在边界 join 一次
+// ✅ Combine with allOf / thenCombine; join once at the boundary
 ```
 
-**超时**：Java 8 没有 `orTimeout` / `completeOnTimeout`（Java 9+）。需要超时就用 `get(timeout, unit)`，或自建 scheduler + `applyToEither` 完成异常。
+**Timeouts:** Java 8 has no `orTimeout` / `completeOnTimeout` (Java 9+). Use `get(timeout, unit)`, or a scheduler + `applyToEither` that completes exceptionally.
 
-**异常**：链路末端用 `exceptionally` / `handle` / `whenComplete`，避免异常被静默吞掉。
+**Exceptions:** Attach `exceptionally` / `handle` / `whenComplete` at the chain boundary so failures are not swallowed.
 
 ```java
-// ❌ 共享可变的 SimpleDateFormat / HashMap 当缓存
+// ❌ Shared mutable SimpleDateFormat / HashMap as a cache
 private static final SimpleDateFormat SDF = ...;
-private final Map<String, String> cache = new HashMap<>(); // 多线程 put
+private final Map<String, String> cache = new HashMap<>(); // concurrent puts
 
-// ✅ ConcurrentHashMap；日期用 java.time
+// ✅ ConcurrentHashMap; dates via java.time
 private final ConcurrentHashMap<String, String> cache = new ConcurrentHashMap<>();
 ```
 
@@ -340,16 +340,16 @@ private final ConcurrentHashMap<String, String> cache = new ConcurrentHashMap<>(
 
 ## Spring Boot 2
 
-包名是 **`javax.*`**，不是 `jakarta.*`。审查时不要要求迁到 Jakarta，除非 PR 目标就是升级 Boot 3。
+Packages are **`javax.*`**, not `jakarta.*`. Do not require a Jakarta migration unless the PR's goal is upgrading to Boot 3.
 
-### 依赖注入
+### Dependency injection
 
 ```java
-// ❌ 字段 @Autowired：难测、依赖不透明
+// ❌ Field @Autowired: hard to test, opaque dependencies
 @Autowired
 private UserRepository userRepo;
 
-// ✅ 构造器注入（Boot 2 单构造器可省略 @Autowired）
+// ✅ Constructor injection (Boot 2: single constructor can omit @Autowired)
 private final UserRepository userRepo;
 
 public UserService(UserRepository userRepo) {
@@ -357,14 +357,14 @@ public UserService(UserRepository userRepo) {
 }
 ```
 
-### 配置
+### Configuration
 
 ```java
-// ❌ 密钥硬编码；@Value 散落各处
+// ❌ Hard-coded secrets; @Value scattered everywhere
 @Value("${app.payment.api-key}")
 private String apiKey;
 
-// ✅ @ConfigurationProperties（Java 8 用 class，不是 record）
+// ✅ @ConfigurationProperties (Java 8 uses a class, not a record)
 @ConfigurationProperties(prefix = "app.payment")
 public class PaymentProperties {
     private String apiKey;
@@ -373,17 +373,17 @@ public class PaymentProperties {
 }
 ```
 
-记得 `@EnableConfigurationProperties`；Boot **2.2+** 也可用 `@ConfigurationPropertiesScan`（`@SpringBootApplication` 默认会扫启动类所在包）。
+Register with `@EnableConfigurationProperties`. On Boot **2.2+**, `@ConfigurationPropertiesScan` also works (`@SpringBootApplication` scans the startup class package by default).
 
-### RestTemplate 必须设超时
+### RestTemplate must have timeouts
 
-默认 **无限等待**。下游挂死会占满 Tomcat / 业务线程。
+Default is **infinite wait**. A hung downstream can exhaust Tomcat / worker threads.
 
 ```java
-// ❌ 裸 new RestTemplate()，无超时
+// ❌ Bare new RestTemplate() — no timeouts
 return new RestTemplate();
 
-// ✅ Boot 2.1+ 用 Duration
+// ✅ Boot 2.1+ Duration-based timeouts
 @Bean
 public RestTemplate restTemplate(RestTemplateBuilder builder) {
     return builder
@@ -393,68 +393,69 @@ public RestTemplate restTemplate(RestTemplateBuilder builder) {
 }
 ```
 
-若自定义 `ClientHttpRequestFactory`（如 Apache HttpClient），确认 factory 上也设置了 connect / read / connectionRequest 超时，避免 builder 超时被覆盖失效。
+If you customize `ClientHttpRequestFactory` (e.g. Apache HttpClient), set connect / read / connectionRequest timeouts on the factory too — otherwise builder timeouts may be ignored.
 
-### 事务代理陷阱（Boot 2/3 相同）
+### Transaction proxy trap (same on Boot 2/3)
 
 ```java
-// ❌ 同类 self-call，@Transactional 不生效（JDK/CGLIB 代理拦不到）
+// ❌ Same-class self-call — @Transactional does not apply (proxy not invoked)
 public void create(Order o) {
-    save(o); // 内部调用
+    save(o); // internal call
 }
 @Transactional
 public void save(Order o) { ... }
 
-// ✅ 事务边界放在 public 入口；或拆到另一个 Bean
+// ✅ Put the transaction boundary on the public entry point, or split into another bean
 @Transactional
 public void create(Order o) { saveInternal(o); }
 ```
 
-`@Transactional` 加在 `private` 方法上同样无效。
+`@Transactional` on `private` methods is also ineffective.
 
 ---
 
 ## JPA / Hibernate 5
 
-实体注解来自 `javax.persistence.*`。
+Entity annotations come from `javax.persistence.*`.
 
 ### N+1
 
-> 通用原理见 [N+1 查询跨语言指南](cross-cutting/n-plus-one-queries.md)
+> Cross-language background: [N+1 query guide](cross-cutting/n-plus-one-queries.md)
 
 ```java
-// ❌ EAGER 或循环触发懒加载
+// ❌ EAGER, or loops that trigger lazy loads
 @OneToMany(fetch = FetchType.EAGER)
 private List<Order> orders;
 
 for (User u : userRepo.findAll()) {
-    u.getOrders().size(); // 懒加载时 N 次查询
+    u.getOrders().size(); // N queries when lazy
 }
 
-// ✅ JOIN FETCH / @EntityGraph；默认保持 LAZY
+// ✅ JOIN FETCH / @EntityGraph; keep LAZY by default
 @Query("SELECT u FROM User u JOIN FETCH u.orders")
 List<User> findAllWithOrders();
 ```
 
-### 事务与只读
+### Transactions & read-only
 
 ```java
-// ❌ Controller 开事务；或 private 上 @Transactional
-// ✅ Service 公共方法；读操作加 readOnly
+// ❌ Transactions opened in Controllers; or @Transactional on private methods
+// ✅ Public Service methods; mark reads readOnly
 @Transactional(readOnly = true)
 public User get(Long id) { ... }
 ```
 
-### Entity 与 Lombok
+### Entities & Lombok
 
 ```java
-// ❌ @Data 生成的 equals/hashCode 易拖入懒加载字段
+// ❌ @Data equals/hashCode often pulls in lazy associations
 @Entity
 @Data
 public class User { ... }
 
-// ✅ @Getter/@Setter；equals/hashCode 基于稳定业务键，或「仅当 id 非 null」的 id 比较
-// ⚠️ 不要用含懒加载关联的全部字段；新建未持久化实体 id 均为 null，纯 id equals 会把它们判成不相等（通常可接受）
+// ✅ @Getter/@Setter; equals/hashCode on a stable business key, or null-safe id
+// ⚠️ Do not include lazy associations; new unsaved entities all have null id,
+//    so id-only equals treats them as unequal (usually acceptable)
 @Entity
 @Getter
 @Setter
@@ -476,22 +477,22 @@ public class User {
 }
 ```
 
-### 时间字段
+### Temporal fields
 
-Hibernate 5 对 `java.time` 支持可用，但 `ZonedDateTime` 映射到无时区 `TIMESTAMP` 时会按 JVM 时区归一化，跨区易出偏差。优先：
+Hibernate 5 supports `java.time`, but mapping `ZonedDateTime` to a zone-less `TIMESTAMP` normalizes with the JVM zone and drifts across regions. Prefer:
 
-- 库内 UTC：`Instant` 或 `OffsetDateTime`
-- 配置 `spring.jpa.properties.hibernate.jdbc.time_zone=UTC`（若团队约定）
-- 遗留 `java.util.Date` 字段迁移时再谈；新代码不要新增 `Date` / `@Temporal`
+- Store UTC: `Instant` or `OffsetDateTime`
+- Set `spring.jpa.properties.hibernate.jdbc.time_zone=UTC` when the team agrees
+- Migrate legacy `java.util.Date` fields deliberately; do not add new `Date` / `@Temporal` in new code
 
 ---
 
-## 异常处理
+## Exception Handling
 
-Boot 2 没有 Spring 6 的 `ProblemDetail` 一等公民支持（那是 Boot 3 叙事）。用统一 `@ControllerAdvice` + 明确 HTTP 状态即可。
+Boot 2 does not treat Spring 6 `ProblemDetail` as a first-class citizen (that is a Boot 3 story). Use a shared `@ControllerAdvice` with clear HTTP statuses.
 
 ```java
-// ❌ 吞异常、printStackTrace、返回 null 掩盖失败
+// ❌ Swallow exceptions, printStackTrace, return null to hide failure
 try {
     userService.create(user);
 } catch (Exception e) {
@@ -499,7 +500,7 @@ try {
     return null;
 }
 
-// ✅ 业务异常 + 全局处理
+// ✅ Domain exceptions + global handler
 @RestControllerAdvice
 public class GlobalExceptionHandler {
     @ExceptionHandler(UserNotFoundException.class)
@@ -510,20 +511,20 @@ public class GlobalExceptionHandler {
 }
 ```
 
-资源关闭用 try-with-resources（Java 7+），不要手写 `finally { close() }` 还漏 null 判断。
+Close resources with try-with-resources (Java 7+). Avoid hand-rolled `finally { close() }` that forgets null checks.
 
 ---
 
-## 测试
+## Testing
 
 ```java
-// ❌ 凡测必 @SpringBootTest（慢、脆）
+// ❌ @SpringBootTest for every unit test (slow and brittle)
 @SpringBootTest
 public class UserServiceTest { ... }
 
-// ✅ 纯单元：JUnit 4/5 + Mockito
+// ✅ Pure unit tests: JUnit 4/5 + Mockito
 @RunWith(MockitoJUnitRunner.class) // JUnit 4
-// 或 @ExtendWith(MockitoExtension.class) // JUnit 5
+// or @ExtendWith(MockitoExtension.class) // JUnit 5
 public class UserServiceTest {
     @Mock private UserRepository repo;
     @InjectMocks private UserService service;
@@ -533,44 +534,44 @@ public class UserServiceTest {
 }
 ```
 
-时间相关逻辑注入 `Clock`，避免 `Instant.now()` 写死导致无法断言。
+Inject `Clock` into time-sensitive logic so tests do not depend on `Instant.now()`.
 
-遗留栈常见 JUnit 4；若已混用 JUnit 5，同一模块不要两套 Runner 风格混到无法维护。
+Legacy stacks often use JUnit 4; if JUnit 5 is mixed in, keep one runner style per module.
 
 ---
 
 ## Review Checklist
 
-### 版本与范围
-- [ ] 已确认是 Java 8 / Boot 2 / `javax.*`，未用 Java 17+ API 或 `jakarta.*` 强行要求
-- [ ] 未把「改用 Record / 虚拟线程 / 文本块」当作 blocking 意见
+### Version & scope
+- [ ] Confirmed Java 8 / Boot 2 / `javax.*` — do not demand Java 17+ APIs or `jakarta.*`
+- [ ] Do not treat "use records / virtual threads / text blocks" as blocking feedback
 
-### 语言特性
-- [ ] Lambda 短小；优先方法引用与标准函数式接口
-- [ ] Stream 用于转换/过滤/归约，而非简单副作用循环
-- [ ] 收集使用 `Collectors.*`（无 `Stream.toList()`）
-- [ ] `toMap` 处理了 null value 与重复 key
-- [ ] `parallelStream` 有充分理由，且无共享可变状态
-- [ ] Optional 仅作返回值；无 `isPresent`+`get` 滥用；昂贵默认用 `orElseGet`
-- [ ] 日期用 `java.time`；无共享 `SimpleDateFormat`；类型选对（`Instant` vs `LocalDateTime`）
-- [ ] 格式化用 `yyyy` 而非 week-based `YYYY`（除非真要周历年）
+### Language features
+- [ ] Lambdas stay short; prefer method references and standard functional interfaces
+- [ ] Streams used for transform / filter / reduce, not simple side-effect loops
+- [ ] Collection uses `Collectors.*` (no `Stream.toList()`)
+- [ ] `toMap` handles null values and duplicate keys
+- [ ] `parallelStream` is justified and has no shared mutable state
+- [ ] Optional is return-type only; no `isPresent`+`get` abuse; expensive defaults use `orElseGet`
+- [ ] Dates use `java.time`; no shared `SimpleDateFormat`; correct type (`Instant` vs `LocalDateTime`)
+- [ ] Patterns use `yyyy`, not week-based `YYYY` (unless week-year is intentional)
 
-### 并发
-- [ ] 线程池有界、可关闭；I/O 不用 `ForkJoinPool.commonPool()`
-- [ ] CF 传了显式 Executor；`thenCompose` 用于嵌套异步；有超时与异常处理
-- [ ] 共享状态用并发集合；无静态可变 `DateFormat`
+### Concurrency
+- [ ] Thread pools are bounded and shut down; I/O does not use `ForkJoinPool.commonPool()`
+- [ ] CompletableFuture uses an explicit Executor; `thenCompose` for nested async; timeouts and error handling present
+- [ ] Shared state uses concurrent collections; no static mutable `DateFormat`
 
 ### Spring Boot 2 / JPA
-- [ ] 构造器注入；`@ConfigurationProperties` 收拢配置
-- [ ] `RestTemplate`（及 RequestFactory）设置了 connect/read 超时
-- [ ] `@Transactional` 在 public 入口，无 self-invocation / private 失效问题
-- [ ] 无 N+1；Entity 不用 `@Data`；时间字段策略明确（UTC）
-- [ ] 包名保持 `javax.*` 一致，无 javax/jakarta 混用
+- [ ] Constructor injection; config via `@ConfigurationProperties`
+- [ ] `RestTemplate` (and RequestFactory) has connect/read timeouts
+- [ ] `@Transactional` on public entry points — no self-invocation / private-method failures
+- [ ] No N+1; entities avoid `@Data`; temporal strategy is explicit (UTC)
+- [ ] Packages stay consistently `javax.*` — no javax/jakarta mix
 
-### 质量
-- [ ] 异常不吞；统一错误响应
-- [ ] try-with-resources 管理 I/O 与 DB 资源
-- [ ] 核心逻辑有单元测试；时间可注入 `Clock`
+### Quality
+- [ ] Exceptions are not swallowed; error responses are centralized
+- [ ] try-with-resources for I/O and DB resources
+- [ ] Core logic has unit tests; time is injectable via `Clock`
 
 ---
 
