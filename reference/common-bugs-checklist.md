@@ -200,10 +200,15 @@ Quick-reference bug patterns organized by category. For detailed code examples, 
 - [ ] Dynamic `send`, `constantize`, `eval`, or SQL fragment controlled by user input
 - [ ] Untrusted data passed to `Marshal.load`, unsafe YAML loading, or an interpolated shell command
 - [ ] Strong parameters use `permit!`, `to_unsafe_h`, or an empty hash allowlist
+- [ ] Nested `params.expect` arrays use a flat shape instead of the required `[[...]]` form
 - [ ] Active Record query interpolates values or dynamic identifiers into SQL
+- [ ] `Model.find(params[:id])` loads a record before ownership or policy scoping (IDOR)
+- [ ] `redirect_to` accepts a user-controlled URL with `allow_other_host: true` (open redirect)
+- [ ] Browser-authenticated state changes skip CSRF protection or use unsafe session cookie flags
 - [ ] Association access in a loop causes N+1 queries
 - [ ] Model validation lacks a matching database constraint for a critical invariant
 - [ ] `update_all` / `delete_all` unexpectedly skips callbacks and validations
+- [ ] Bulk writes can drift a `counter_cache` without reconciliation
 - [ ] Active Job retry can duplicate a payment, email, or other external side effect
 - [ ] GlobalID job argument can be deleted before deserialization
 - [ ] Transaction contains external side effects that cannot roll back
