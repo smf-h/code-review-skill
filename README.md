@@ -119,7 +119,7 @@ It covers **20+ languages and frameworks** with over **21,000 lines** of careful
     <tr>
       <td>&#128142; Ruby 3.4+/4.0 + Rails 8.x</td>
       <td><code>reference/ruby.md</code></td>
-      <td>~860</td>
+      <td>~950</td>
     </tr>
     <tr>
       <td>&#128230; NestJS</td>
@@ -497,7 +497,7 @@ MIT &copy; [awesome-skills](https://github.com/awesome-skills)
 | | &#9749; Java 8 + Spring Boot 2 | `reference/java8.md` | ~580 |
 | | &#9889; FastAPI | `reference/fastapi.md` | ~590 |
 | | PHP 8.x | `reference/php.md` | ~700 |
-| | &#128142; Ruby 3.4+/4.0 + Rails 8.x | `reference/ruby.md` | ~860 |
+| | &#128142; Ruby 3.4+/4.0 + Rails 8.x | `reference/ruby.md` | ~950 |
 | | &#128230; NestJS | `reference/nestjs.md` | ~590 |
 | | &#128013; Django / DRF | `reference/django.md` | ~1,030 |
 | | &#128013; Python | `reference/python.md` | ~1,070 |
