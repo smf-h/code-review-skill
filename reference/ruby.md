@@ -454,9 +454,13 @@ CSRF protection is required when a browser automatically sends an authenticated 
 class ApplicationController < ActionController::Base
   protect_from_forgery with: :exception
 end
+```
 
-# Good: session cookies are not available to JavaScript, use HTTPS in production,
-# and make the cross-site policy explicit for the application's flows.
+```ruby
+# Good: configure the session store in an initializer (for example
+# config/initializers/session_store.rb), not inside a controller class.
+# Keep cookies unavailable to JavaScript, HTTPS-only in production, and make
+# the cross-site policy explicit for the application's flows.
 Rails.application.config.session_store :cookie_store,
   key: "_app_session",
   secure: Rails.env.production?,
@@ -464,13 +468,19 @@ Rails.application.config.session_store :cookie_store,
   same_site: :lax
 ```
 
-For Active Storage and any server-side URL fetch, verify blob ownership, content-type and size validation, and SSRF controls before accepting a user-controlled URL. See the [Security Review Guide](security-review-guide.md) for broader request and asset review guidance.
-
 Review questions:
 - Does any browser-authenticated `POST`, `PATCH`, `PUT`, or `DELETE` skip `protect_from_forgery`?
 - Are `secure`, `httponly`, and `same_site` cookie settings appropriate for the deployment and login flows?
 - Does an API-only endpoint avoid cookie authentication, or otherwise use a deliberate CSRF defense?
-- Can an attachment, redirect, or server-side fetch access a file or URL outside the authorized scope?
+
+### Review Active Storage and Server-Side Fetches
+
+For Active Storage uploads and any server-side URL fetch, verify blob ownership, content-type and size validation, and SSRF controls before accepting a user-controlled URL. Signed/expiring URLs, direct-upload limits, and variant parameters should stay under an allowlist. See the [Security Review Guide](security-review-guide.md) for broader request and asset review guidance.
+
+Review questions:
+- Can an attachment download, redirect, or server-side fetch access a file or URL outside the authorized scope?
+- Are content type, size, and ownership checked before persisting or transforming a blob?
+- Does a user-controlled URL used for server-side fetching enforce host allowlists and block private network ranges?
 
 ### Make Retried Write Requests Idempotent
 
@@ -485,7 +495,8 @@ order = Orders::CreateOnce.call(
 )
 
 # Migration: require the key when this API requires the header, then close
-# concurrent duplicate-create races.
+# concurrent duplicate-create races. On an existing populated table, backfill
+# or supply a temporary default before adding `null: false`.
 add_column :orders, :idempotency_key, :string, null: false
 add_index :orders, [:user_id, :idempotency_key], unique: true
 ```
@@ -496,6 +507,7 @@ Review questions:
 - Can a timeout or enqueue failure happen after the write commits?
 - Will a caller retry create, payment, invitation, or other non-idempotent work?
 - Is the required key rejected before insert and stored in a `null: false` column? A unique index permits multiple `NULL` values on many adapters.
+- For existing tables, does the migration backfill values before enforcing `null: false`?
 - Is idempotency enforced by a unique constraint and tested under concurrent requests?
 
 ---
